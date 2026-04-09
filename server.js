@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
+const https = require("https");
 
 const app = express();
 app.use(cors());
@@ -8,83 +8,79 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// ── JSEARCH API (RapidAPI) ──
-// Free tier: 200 requests/month
-// Sign up at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "ae85be7603msh2f27442edbe6775p16abf4jsn30ec1af2b689";
 
-// ── GET /api/jobs?q=keyword ──
+function httpsGet(options) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error("Invalid JSON: " + data.slice(0, 200))); }
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 app.get("/api/jobs", async (req, res) => {
   const query = req.query.q || "developer";
 
   try {
-    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(
-      query + " India"
-    )}&page=1&num_b=12&date_posted=month`;
-
-    const response = await fetch(url, {
+    const data = await httpsGet({
       method: "GET",
+      hostname: "jsearch.p.rapidapi.com",
+      path: `/search?query=${encodeURIComponent(query + " India")}&page=1&num_b=12&date_posted=month`,
       headers: {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
-      },
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+      }
     });
 
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+    if (data.errors || !data.data) {
+      console.error("API returned:", JSON.stringify(data).slice(0, 300));
+      return res.status(500).json({ error: "API error", detail: data });
     }
 
-    const data = await response.json();
-    const rawJobs = data.data || [];
-
-    // Format jobs to match your frontend's expected structure
-    const jobs = rawJobs.map((job) => ({
-      id: job.job_id,
-      title: job.job_title || "Software Engineer",
-      company: job.employer_name || "Company",
-      location: job.job_city
-        ? `${job.job_city}, ${job.job_state || "India"}`
-        : job.job_country || "India",
-      salary: job.job_min_salary
-        ? `₹${Math.round(job.job_min_salary / 100000)}–${Math.round(
-            job.job_max_salary / 100000
-          )} LPA`
-        : job.job_salary_period
-        ? job.job_salary_currency + " " + job.job_salary_period
+    const jobs = (data.data || []).map((j) => ({
+      id: j.job_id,
+      title: j.job_title || "Software Engineer",
+      company: j.employer_name || "Company",
+      location: j.job_city
+        ? `${j.job_city}, ${j.job_state || "India"}`
+        : j.job_country || "India",
+      salary: j.job_min_salary
+        ? `₹${Math.round(j.job_min_salary / 100000)}–${Math.round(j.job_max_salary / 100000)} LPA`
         : null,
-      type: job.job_employment_type
-        ? job.job_employment_type.replace("_", " ")
+      type: j.job_employment_type
+        ? j.job_employment_type.replace(/_/g, " ")
         : "Full-time",
-      experience: job.job_required_experience
-        ? job.job_required_experience.required_experience_in_months
-          ? `${Math.round(
-              job.job_required_experience.required_experience_in_months / 12
-            )}+ yrs`
-          : null
+      experience: j.job_required_experience?.required_experience_in_months
+        ? `${Math.round(j.job_required_experience.required_experience_in_months / 12)}+ yrs`
         : null,
-      skills: job.job_required_skills
-        ? job.job_required_skills.slice(0, 5).join(", ")
+      skills: j.job_required_skills
+        ? j.job_required_skills.slice(0, 5).join(", ")
         : null,
-      description: job.job_description
-        ? job.job_description.slice(0, 180) + "..."
+      description: j.job_description
+        ? j.job_description.slice(0, 180) + "..."
         : null,
-      applyUrl: job.job_apply_link || null,
-      postedAt: job.job_posted_at_datetime_utc || null,
-      logo: job.employer_logo || null,
+      applyUrl: j.job_apply_link || null,
     }));
 
     res.json({ jobs, total: jobs.length, query });
+
   } catch (err) {
-    console.error("Job fetch error:", err.message);
-    res.status(500).json({ error: "Failed to fetch jobs", message: err.message });
+    console.error("Error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ── Health check ──
 app.get("/", (req, res) => {
-  res.json({ status: "Skills Matter Backend is running ✅", time: new Date() });
+  res.json({ status: "Skills Matter Backend running ✅", time: new Date() });
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ Server on port ${PORT}`);
 });
